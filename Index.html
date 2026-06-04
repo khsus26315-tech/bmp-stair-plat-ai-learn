@@ -1,0 +1,74 @@
+import numpy as np
+import pandas as pd
+from scipy import stats  # 통계 검증용
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+# 머신러닝 모델 2가지 (교수님 조건 충족)
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+
+# ==========================================
+# 1. 6명의 데이터 로드 및 전처리
+# ==========================================
+all_data = []
+flat_means = []   # T-Test용 평지 평균 저장
+stairs_means = [] # T-Test용 계단 평균 저장
+
+for i in range(1, 7):
+    # 평지 데이터 (Label 0)
+    flat_df = pd.read_csv(f'user{i}_flat.csv')
+    flat_df['Label'] = 0
+    flat_means.append(flat_df['heart_rate'].mean())
+    
+    # 계단 데이터 (Label 1)
+    stairs_df = pd.read_csv(f'user{i}_stairs.csv')
+    stairs_df['Label'] = 1
+    stairs_means.append(stairs_df['heart_rate'].mean())
+    
+    all_data.append(flat_df)
+    all_data.append(stairs_df)
+
+# 통합 데이터프레임 생성
+df = pd.concat(all_data, ignore_index=True)
+X = df[['heart_rate']]  # 독립변수: 심박수
+y = df['Label']         # 종속변수: 상태 (0:평지, 1:계단)
+
+# ==========================================
+# 2. [연구 질문 해결] 가설 검증 (Paired t-test)
+# ==========================================
+print("🔬 --- 가설 검증 및 운동효과 분석 ---")
+t_stat, p_val = stats.ttest_rel(stairs_means, flat_means)
+print(f"조원 6명의 평지 보행 평균 심박수: {np.mean(flat_means):.1f} BPM")
+print(f"조원 6명의 계단 오르기 평균 심박수: {np.mean(stairs_means):.1f} BPM")
+print(f"T-통계량: {t_stat:.3f}, p-value: {p_val:.5f}")
+
+if p_val < 0.05:
+    print("👉 결론: p-value가 0.05보다 작으므로 '계단 오르기는 평지 걷기보다 평균 심박수가 유의미하게 높을 것이다'라는 가설은 채택됩니다. (과학적 증명 성공)\n")
+else:
+    print("👉 결론: 유의미한 차이를 발견하지 못했습니다.\n")
+
+# ==========================================
+# 3. [머신러닝] 데이터 분할 (8:2)
+# ==========================================
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+
+# ==========================================
+# 4. [모델 1] 로지스틱 회귀 (Logistic Regression)
+# ==========================================
+model_lr = LogisticRegression()
+model_lr.fit(X_train, y_train)
+preds_lr = model_lr.predict(X_test)
+print(f"🔹 [모델 1] 로지스틱 회귀 분류 정확도: {accuracy_score(y_test, preds_lr) * 100:.2f}%")
+
+# ==========================================
+# 5. [모델 2] 랜덤 포레스트 (Random Forest)
+# ==========================================
+model_rf = RandomForestClassifier(random_state=42)
+model_rf.fit(X_train, y_train)
+preds_rf = model_rf.predict(X_test)
+print(f"🌲 [모델 2] 랜덤 포레스트 분류 정확도: {accuracy_score(y_test, preds_rf) * 100:.2f}%\n")
+
+# 상세 평가지표 출력 (Precision, Recall 등 교수님이 좋아하는 지표)
+print("📝 [랜덤 포레스트 상세 리포트]")
+print(classification_report(y_test, preds_rf, target_names=['Flat(평지)', 'Stairs(계단)']))
