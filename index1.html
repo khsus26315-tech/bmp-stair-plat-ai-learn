@@ -1,0 +1,119 @@
+import numpy as np
+import pandas as pd
+import glob
+import os
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.ensemble import RandomForestClassifier
+
+# ==========================================
+# [치트키 1] 코랩에 나눔 한글 폰트 무조건 강제 설치 및 등록
+# ==========================================
+!apt-get install -y fonts-nanum > /dev/null 2>&1
+import matplotlib as mpl
+mpl.font_manager.fontManager.addfont('/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf')
+plt.rc('font', family='NanumBarunGothic')
+plt.rcParams['axes.unicode_minus'] = False
+
+# ==========================================
+# 1. 파일 자동 수집 및 데이터 로드
+# ==========================================
+json_files = glob.glob('/content/**/*.json', recursive=True)
+
+hr_flat_dfs = []
+hr_stairs_dfs = []
+live_dfs = []
+
+print("📁 데이터를 다시 한 번 정렬하고 있습니다...")
+
+for file_path in json_files:
+    file_name = os.path.basename(file_path)
+    if 'config' in file_name or 'package' in file_name or 'anscombe' in file_name:
+        continue
+    try:
+        if 'flat' in file_name.lower():
+            df_temp = pd.read_json(file_path)
+            df_temp['Label'] = 0
+            hr_flat_dfs.append(df_temp)
+        elif 'stair' in file_name.lower():
+            df_temp = pd.read_json(file_path)
+            df_temp['Label'] = 1
+            hr_stairs_dfs.append(df_temp)
+        elif 'exercise.live_data' in file_name:
+            df_temp = pd.read_json(file_path)
+            live_dfs.append(df_temp)
+    except Exception as e:
+        pass
+
+# ==========================================
+# 2. 데이터 시계열 병합 및 전처리
+# ==========================================
+if not hr_flat_dfs or not hr_stairs_dfs or not live_dfs:
+    print("❌ 파일을 찾지 못했습니다. 왼쪽에 파일이 잘 있는지 확인해 주세요!")
+else:
+    hr_flat_all = pd.concat(hr_flat_dfs, ignore_index=True)
+    hr_stairs_all = pd.concat(hr_stairs_dfs, ignore_index=True)
+    live_all = pd.concat(live_dfs, ignore_index=True)
+
+    for df_target in [hr_flat_all, hr_stairs_all]:
+        if 'hr' in df_target.columns and 'heart_rate' not in df_target.columns:
+            df_target.rename(columns={'hr': 'heart_rate'}, inplace=True)
+
+    hr_flat_all['datetime'] = pd.to_datetime(hr_flat_all['start_time'], errors='coerce')
+    hr_stairs_all['datetime'] = pd.to_datetime(hr_stairs_all['start_time'], errors='coerce')
+    live_all['datetime'] = pd.to_datetime(live_all['start_time'], errors='coerce', unit='ms' if live_all['start_time'].dtype != 'O' else None)
+
+    hr_flat_all['time_sec'] = hr_flat_all['datetime'].astype('int64') // 10**9
+    hr_stairs_all['time_sec'] = hr_stairs_all['datetime'].astype('int64') // 10**9
+    live_all['time_sec'] = live_all['datetime'].astype('int64') // 10**9
+
+    if 'speed' not in live_all.columns:
+        live_all['speed'] = 0
+        
+    live_summary = live_all.groupby('time_sec')[['speed']].mean().reset_index()
+
+    flat_total = pd.merge(hr_flat_all, live_summary, on='time_sec', how='left').fillna(0)
+    stairs_total = pd.merge(hr_stairs_all, live_summary, on='time_sec', how='left').fillna(0)
+
+    df = pd.concat([flat_total, stairs_total], ignore_index=True)
+    df['elapsed_time'] = df['time_sec'] - df['time_sec'].min()
+
+    # ==========================================
+    # 3. 랜덤 포레스트 머신러닝 학습
+    # ==========================================
+    X = df[['elapsed_time', 'heart_rate', 'speed']]
+    y = df['Label']
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    model_rf = RandomForestClassifier(random_state=42)
+    model_rf.fit(X_train, y_train)
+
+    print("📊 [성공] AI 모델 학습 완료! 즉시 한글 그래프를 출력합니다.")
+    print("-" * 50)
+
+    # ==========================================
+    # [치트키 2] 폰트 캐시를 우회하여 강제로 한글 시각화 그래프 그리기
+    # ==========================================
+    importances = model_rf.feature_importances_
+    features = ['elapsed_time\n(경과시간)', 'heart_rate\n(심박수)', 'speed\n(이동속도)']
+
+    plt.figure(figsize=(9, 5))
+    # 이쁜 색상 바 차트 그리기
+    bars = plt.barh(features, importances, color=['#3498db', '#e74c3c', '#2ecc71'], edgecolor='black', height=0.5)
+    
+    # 그래프 스타일 다듬기
+    plt.title('🧠 평지 vs 계단 분류 시 AI가 중요하게 여긴 지표 (중요도)', fontsize=14, fontweight='bold', pad=15)
+    plt.xlabel('AI 기여도 (Importance)', fontsize=12, fontweight='bold')
+    plt.xlim(0, max(importances) * 1.1)
+    plt.grid(axis='x', linestyle='--', alpha=0.5)
+
+    # 막대 끝에 숫자 표시해주기
+    for bar in bars:
+        width = bar.get_width()
+        plt.text(width + 0.01, bar.get_y() + bar.get_height()/2, f'{width*100:.1f}%', 
+                 va='center', ha='left', fontsize=11, fontweight='bold')
+
+    plt.tight_layout()
+    plt.show()
