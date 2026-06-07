@@ -1,74 +1,111 @@
 import numpy as np
 import pandas as pd
-from scipy import stats  # 통계 검증용
+import glob
+import os
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, classification_report
-
-# 머신러닝 모델 2가지 (교수님 조건 충족)
-from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 
-# ==========================================
-# 1. 6명의 데이터 로드 및 전처리
-# ==========================================
-all_data = []
-flat_means = []   # T-Test용 평지 평균 저장
-stairs_means = [] # T-Test용 계단 평균 저장
+json_files = glob.glob('/content/**/*.json', recursive=True)
 
-for i in range(1, 7):
-    # 평지 데이터 (Label 0)
-    flat_df = pd.read_csv(f'user{i}_flat.csv')
-    flat_df['Label'] = 0
-    flat_means.append(flat_df['heart_rate'].mean())
+hr_flat_dfs = []
+hr_stairs_dfs = []
+live_dfs = []
+
+print("📁 [조원 맞춤형] 파일 분류 및 데이터 로드 시작...")
+
+for file_path in json_files:
+    file_name = os.path.basename(file_path)
     
-    # 계단 데이터 (Label 1)
-    stairs_df = pd.read_csv(f'user{i}_stairs.csv')
-    stairs_df['Label'] = 1
-    stairs_means.append(stairs_df['heart_rate'].mean())
-    
-    all_data.append(flat_df)
-    all_data.append(stairs_df)
-
-# 통합 데이터프레임 생성
-df = pd.concat(all_data, ignore_index=True)
-X = df[['heart_rate']]  # 독립변수: 심박수
-y = df['Label']         # 종속변수: 상태 (0:평지, 1:계단)
+    # 코랩 기본 시스템 파일 제외
+    if 'config' in file_name or 'package' in file_name or 'anscombe' in file_name:
+        continue
+        
+    try:
+        # 1. 조원분이 정리한 평지 심박수 파일 매칭
+        if 'flat' in file_name.lower():
+            df_temp = pd.read_json(file_path)
+            df_temp['Label'] = 0  # 평지는 0
+            hr_flat_dfs.append(df_temp)
+            print(f" -> 🔹 [평지 심박수] 파일 매칭 성공: {file_name}")
+            
+        # 2. 조원분이 정리한 계단 심박수 파일 매칭
+        elif 'stair' in file_name.lower():
+            df_temp = pd.read_json(file_path)
+            df_temp['Label'] = 1  # 계단은 1
+            hr_stairs_dfs.append(df_temp)
+            print(f" -> 🔺 [계단 심박수] 파일 매칭 성공: {file_name}")
+            
+        # 3. 삼성 헬스 운동 라이브 파일 매칭
+        elif 'exercise.live_data' in file_name:
+            df_temp = pd.read_json(file_path)
+            live_dfs.append(df_temp)
+            
+    except Exception as e:
+        print(f" ❌ {file_name} 파일 로드 중 에러 발생: {e}")
 
 # ==========================================
-# 2. [연구 질문 해결] 가설 검증 (Paired t-test)
+# 2. 데이터 통합 및 병합(Merge) 전처리 (에러 해결 구간!)
 # ==========================================
-print("🔬 --- 가설 검증 및 운동효과 분석 ---")
-t_stat, p_val = stats.ttest_rel(stairs_means, flat_means)
-print(f"조원 6명의 평지 보행 평균 심박수: {np.mean(flat_means):.1f} BPM")
-print(f"조원 6명의 계단 오르기 평균 심박수: {np.mean(stairs_means):.1f} BPM")
-print(f"T-통계량: {t_stat:.3f}, p-value: {p_val:.5f}")
+print(f"\n📊 로드 완료 정보 -> 평지: {len(hr_flat_dfs)}개 / 계단: {len(hr_stairs_dfs)}개 / 라이브: {len(live_dfs)}개")
 
-if p_val < 0.05:
-    print("👉 결론: p-value가 0.05보다 작으므로 '계단 오르기는 평지 걷기보다 평균 심박수가 유의미하게 높을 것이다'라는 가설은 채택됩니다. (과학적 증명 성공)\n")
+if not hr_flat_dfs or not hr_stairs_dfs or not live_dfs:
+    print("\n❌ 에러: 여전히 매칭되는 필수 파일이 부족합니다. 파일명을 다시 확인해 주세요.")
 else:
-    print("👉 결론: 유의미한 차이를 발견하지 못했습니다.\n")
+    # 리스트에 모인 데이터 합치기
+    hr_flat_all = pd.concat(hr_flat_dfs, ignore_index=True)
+    hr_stairs_all = pd.concat(hr_stairs_dfs, ignore_index=True)
+    live_all = pd.concat(live_dfs, ignore_index=True)
 
-# ==========================================
-# 3. [머신러닝] 데이터 분할 (8:2)
-# ==========================================
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    # 컬럼명 통일 (hr -> heart_rate)
+    for df_target in [hr_flat_all, hr_stairs_all]:
+        if 'hr' in df_target.columns and 'heart_rate' not in df_target.columns:
+            df_target.rename(columns={'hr': 'heart_rate'}, inplace=True)
 
-# ==========================================
-# 4. [모델 1] 로지스틱 회귀 (Logistic Regression)
-# ==========================================
-model_lr = LogisticRegression()
-model_lr.fit(X_train, y_train)
-preds_lr = model_lr.predict(X_test)
-print(f"🔹 [모델 1] 로지스틱 회귀 분류 정확도: {accuracy_score(y_test, preds_lr) * 100:.2f}%")
+    # 🔥 [에러 해결 핵심] 어떤 형식이든 안전하게 Datetime으로 먼저 변환 후 초(sec) 추출
+    hr_flat_all['datetime'] = pd.to_datetime(hr_flat_all['start_time'], errors='coerce')
+    hr_stairs_all['datetime'] = pd.to_datetime(hr_stairs_all['start_time'], errors='coerce')
+    live_all['datetime'] = pd.to_datetime(live_all['start_time'], errors='coerce', unit='ms' if live_all['start_time'].dtype != 'O' else None)
 
-# ==========================================
-# 5. [모델 2] 랜덤 포레스트 (Random Forest)
-# ==========================================
-model_rf = RandomForestClassifier(random_state=42)
-model_rf.fit(X_train, y_train)
-preds_rf = model_rf.predict(X_test)
-print(f"🌲 [모델 2] 랜덤 포레스트 분류 정확도: {accuracy_score(y_test, preds_rf) * 100:.2f}%\n")
+    # 타임스탬프 값을 초(sec) 정수로 통일하여 매칭 확률 극대화
+    hr_flat_all['time_sec'] = hr_flat_all['datetime'].astype('int64') // 10**9
+    hr_stairs_all['time_sec'] = hr_stairs_all['datetime'].astype('int64') // 10**9
+    live_all['time_sec'] = live_all['datetime'].astype('int64') // 10**9
 
-# 상세 평가지표 출력 (Precision, Recall 등 교수님이 좋아하는 지표)
-print("📝 [랜덤 포레스트 상세 리포트]")
-print(classification_report(y_test, preds_rf, target_names=['Flat(평지)', 'Stairs(계단)']))
+    # 속도(speed) 데이터 예외 처리
+    if 'speed' not in live_all.columns:
+        live_all['speed'] = 0
+        
+    # 같은 시간에 찍힌 운동 데이터 평균 요약
+    live_summary = live_all.groupby('time_sec')[['speed']].mean().reset_index()
+
+    # 시간(time_sec) 기준으로 심박수와 운동 데이터 병합
+    flat_total = pd.merge(hr_flat_all, live_summary, on='time_sec', how='left').fillna(0)
+    stairs_total = pd.merge(hr_stairs_all, live_summary, on='time_sec', how='left').fillna(0)
+
+    # 최종 데이터 병합
+    df = pd.concat([flat_total, stairs_total], ignore_index=True)
+
+    # 머신러닝 입력용 누적 경과 시간(elapsed_time) 계산
+    all_min_time = df['time_sec'].min()
+    df['elapsed_time'] = df['time_sec'] - all_min_time
+
+    # ==========================================
+    # 3. 머신러닝 모델 학습 및 평가 (시간 + 심박수 + 속도 반영)
+    # ==========================================
+    X = df[['elapsed_time', 'heart_rate', 'speed']]
+    y = df['Label']
+
+    print(f"📊 전처리 최종 성공! 머신러닝에 입력될 {len(df)}개의 대용량 통합 데이터가 완성되었습니다.")
+
+    # 데이터 분할 (8:2)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    print("\n🤖 --- 머신러닝 모델 학습 결과 (랜덤 포레스트) ---")
+    model_rf = RandomForestClassifier(random_state=42)
+    model_rf.fit(X_train, y_train)
+    preds = model_rf.predict(X_test)
+
+    print(f"🌲 랜덤 포레스트 최종 분류 정확도: {accuracy_score(y_test, preds) * 100:.2f}%\n")
+    print("📝 [상세 분석 리포트]")
+    print(classification_report(y_test, preds, target_names=['Flat(평지)', 'Stairs(계단)'], zero_division=0))
